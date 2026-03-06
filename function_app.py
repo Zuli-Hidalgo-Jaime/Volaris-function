@@ -47,7 +47,6 @@ def _make_sas_url(conn_str: str, container: str, blob_name: str, hours: int = 2)
     account_key = p.get("AccountKey")
 
     if not account_name or not account_key:
-        # Si no hay key, regresamos ruta sin SAS (para MI luego se maneja distinto)
         return f"https://{account_name}.blob.core.windows.net/{container}/{blob_name}"
 
     sas = generate_blob_sas(
@@ -62,16 +61,13 @@ def _make_sas_url(conn_str: str, container: str, blob_name: str, hours: int = 2)
 
 
 def _get_container_and_blob(path: str) -> tuple[str, str]:
-    # "rules/Reglas.xlsx" -> ("rules","Reglas.xlsx")
     path = path.lstrip("/")
     container, blob = path.split("/", 1)
     return container, blob
 
 
-# Normalización robusta (acentos + espacios + upper)
 
 def _strip_accents(s: str) -> str:
-    # NFKD separa letras/acentos; luego quitamos los diacríticos
     return "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
 
 
@@ -86,21 +82,18 @@ def _norm_text(x) -> str:
 
 
 def _norm_code(x) -> str:
-    # Para códigos tipo MXN/USD, quitamos símbolos/puntuación
     s = _norm_text(x)
     s = re.sub(r"[^A-Z0-9]", "", s)
     return s
 
 
 def _safe_upper(x):
-    # (ANTES solo hacía strip+upper) -> ahora también quita acentos
     if pd.isna(x):
         return ""
     return _norm_text(x)
 
 
 
-#Sinónimos / Canonicalización
 
 SI_NO_SYNONYMS = {
     "SI": "SI",
@@ -118,7 +111,6 @@ SI_NO_SYNONYMS = {
 }
 
 METODO_PAGO_SYNONYMS = {
-    # tarjeta corporativa
     "TDC": "TDC",
     "TARJETA": "TDC",
     "TARJETADECREDITO": "TDC",
@@ -127,10 +119,8 @@ METODO_PAGO_SYNONYMS = {
     "TC": "TDC",
     "CREDITCARD": "TDC",
     "CREDIT CARD": "TDC",
-    # efectivo
     "EFECTIVO": "EFECTIVO",
     "CASH": "EFECTIVO",
-    # personal / propio
     "PERSONAL": "PERSONAL",
     "PROPIO": "PERSONAL",
     "MI DINERO": "PERSONAL",
@@ -153,32 +143,25 @@ MONEDA_SYNONYMS = {
     "EUROS": "EUR",
 }
 
-# Importante: estas keys se comparan NORMALIZADAS (sin acentos)
 CATEGORIA_SYNONYMS = {
-    # transporte tipo taxi / apps
     "UBER": "Taxi",
     "DIDI": "Taxi",
     "CABIFY": "Taxi",
     "RIDESHARE": "Taxi",
     "RIDE SHARE": "Taxi",
-    # avión/vuelo
     "AVION": "Vuelo",
     "AEROLINEA": "Vuelo",
     "AEROLINEAS": "Vuelo",
-    # transporte público / general
     "TRANSPORTE": "Transporte público",
     "TRANSPORTE PUBLICO": "Transporte público",
     "METRO": "Transporte público",
     "BUS": "Transporte público",
     "AUTOBUS": "Transporte público",
-    # peajes / casetas
     "CASETA": "Peajes",
     "CASETAS": "Peajes",
     "PEAJE": "Peajes",
     "PEAJES": "Peajes",
-    # estacionamiento
     "PARKING": "Estacionamiento",
-    # telefonía/internet
     "TELEFONO": "Telefonía/Internet",
     "INTERNET": "Telefonía/Internet",
 }
@@ -205,7 +188,6 @@ def _canon_metodo(x, allowed_lookup: dict | None = None) -> str:
     u = _safe_upper(x)
     if not u:
         return ""
-    # también consideramos variantes sin espacios/puntuación
     u_code = _norm_code(u)
     u = METODO_PAGO_SYNONYMS.get(u, METODO_PAGO_SYNONYMS.get(u_code, u))
     if allowed_lookup:
@@ -218,17 +200,14 @@ def _canon_categoria(x, allowed_lookup: dict | None = None) -> str:
     u = _safe_upper(x)
     if not raw and not u:
         return ""
-    # si es sinónimo, lo llevamos a la categoría canónica (con mayúsculas/acentos correctos)
     if u in CATEGORIA_SYNONYMS:
         return CATEGORIA_SYNONYMS[u]
-    # si existe catálogo, intentamos mapear por normalizado -> valor exacto del catálogo
     if allowed_lookup and u in allowed_lookup:
         return allowed_lookup[u]
     return raw
 
 
 
-# 1) Endpoint: Append row (Chat draft)
 
 @app.route(route="append-expense-row", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
@@ -243,12 +222,10 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # Para demo: SIEMPRE usa el mismo Excel por default (DEFAULT_INPUT_BLOB)
     target_blob_path = body.get("target_blob_path") or DEFAULT_INPUT_BLOB
     sheet_name = body.get("sheet_name") or "Gastos"
     row = body.get("row")
 
-    # --- Blindaje: NO guardar si faltan campos mínimos ---
     required_fields = ["fecha", "categoria", "monto", "moneda", "metodo_pago", "tiene_comprobante"]
 
     if not isinstance(row, dict) or not row:
@@ -277,7 +254,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
         elif isinstance(v, str) and not v.strip():
             missing.append(f)
 
-    # monto debe ser numérico y > 0 (acepta number o string tipo "$3,000")
     try:
         monto_val = _parse_money(row.get("monto"))
     except Exception:
@@ -305,7 +281,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
             status_code=200,
             mimetype="application/json",
         )
-    # --- Fin blindaje ---
 
     confirm_token = body.get("confirm_token")
 
@@ -379,12 +354,9 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # Columnas base que el validador requiere
     base_cols = ["fecha", "categoria", "monto", "moneda", "metodo_pago", "tiene_comprobante"]
-    # Opcionales (se guardan si llegan)
     optional_cols = ["folio_comprobante", "descripcion"]
 
-    # 1) Si el excel existe: lo lee. Si NO existe: lo crea vacío.
     try:
         existing_bytes = _download_blob_bytes(bsc, container, blob_name)
         try:
@@ -400,13 +372,10 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 2) Asegura columnas
     for c in base_cols + optional_cols:
         if c not in df.columns:
             df[c] = ""
 
-    # normaliza lo que llega (acentos/sinónimos) para que quede guardado ya “canónico” ---
-    # aquí no tenemos el catálogo cargado; usamos canonicalización base (sin lookup).
     if "tiene_comprobante" in row:
         row["tiene_comprobante"] = _canon_si_no(row.get("tiene_comprobante"))
     if "metodo_pago" in row:
@@ -416,7 +385,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
     if "categoria" in row:
         row["categoria"] = _canon_categoria(row.get("categoria"))
 
-    # 3) Agrega fila
     new_row = {c: "" for c in df.columns}
     for k, v in row.items():
         if k in new_row:
@@ -425,7 +393,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     appended_index = int(len(df) - 1)
 
-    # 4) Guarda (sobrescribe el mismo blob)
     bio_out = io.BytesIO()
     with pd.ExcelWriter(bio_out, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -439,7 +406,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 5) Regresa confirmación + SAS del borrador
     draft_url = _make_sas_url(conn_str, container, blob_name, hours=4)
 
     return func.HttpResponse(
@@ -455,7 +421,6 @@ def append_expense_row(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
         mimetype="application/json",
     )
-# 2) Endpoint: Validate Excel
 
 @app.route(route="validate-expenses-excel", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
@@ -479,7 +444,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
 
     bsc = BlobServiceClient.from_connection_string(conn_str)
 
-    # Download input + rules 
     in_container, in_blob = _get_container_and_blob(input_blob_path)
     rules_container, rules_blob = _get_container_and_blob(rules_blob_path)
 
@@ -501,17 +465,13 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # --- Read Excels ---
-    # Gastos sheet
     try:
         gastos_df = pd.read_excel(io.BytesIO(input_bytes), sheet_name="Gastos")
     except Exception:
         gastos_df = pd.read_excel(io.BytesIO(input_bytes), sheet_name=0)
 
-    # Catalogos
     catalog_df = pd.read_excel(io.BytesIO(rules_bytes), sheet_name="Catalogos")
 
-    # Listas permitidas desde Catalogos (por columna)
     allowed_si_no = [x for x in catalog_df.get("SI_NO", pd.Series()).dropna().astype(str).tolist()]
     allowed_monedas = [x for x in catalog_df.get("MONEDAS", pd.Series()).dropna().astype(str).tolist()]
     allowed_metodos = [x for x in catalog_df.get("METODO_PAGO", pd.Series()).dropna().astype(str).tolist()]
@@ -520,15 +480,13 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
     allowed_si_no_u = set([_safe_upper(x) for x in allowed_si_no])
     allowed_monedas_u = set([_safe_upper(x) for x in allowed_monedas])
     allowed_metodos_u = set([_safe_upper(x) for x in allowed_metodos])
-    allowed_categorias_u = set([str(x).strip() for x in allowed_categorias])  # categorías “case sensitive” leve
+    allowed_categorias_u = set([str(x).strip() for x in allowed_categorias])
 
-    # lookups canónicos (normalizado -> valor exacto del catálogo) 
     allowed_si_no_lookup = { _safe_upper(x): str(x).strip() for x in allowed_si_no }
     allowed_monedas_lookup = { _safe_upper(x): str(x).strip() for x in allowed_monedas }
     allowed_metodos_lookup = { _safe_upper(x): str(x).strip() for x in allowed_metodos }
     allowed_categorias_lookup = { _safe_upper(x): str(x).strip() for x in allowed_categorias }
 
-    # Reglas 
     rules_map = {}
     try:
         reglas_df = pd.read_excel(io.BytesIO(rules_bytes), sheet_name="Reglas")
@@ -542,7 +500,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
                 "tope_mxn": r.get("tope_mxn", None),
             }
     except Exception:
-        # fallback demo 
         rules_map = {
             "Propinas": {"permitido": "NO", "requiere_comprobante": "NO", "tope_mxn": 0},
             "Gimnasio/Spa": {"permitido": "NO", "requiere_comprobante": "NO", "tope_mxn": 0},
@@ -551,7 +508,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
             "Taxi": {"permitido": "SI", "requiere_comprobante": "SI", "tope_mxn": 600},
         }
 
-    # Validación fila por fila 
     required_cols = ["fecha", "categoria", "monto", "moneda", "metodo_pago", "tiene_comprobante"]
     for c in required_cols:
         if c not in gastos_df.columns:
@@ -568,14 +524,12 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
     out["requiere_comprobante_regla"] = ""
 
     for idx, row in out.iterrows():
-        #  canonicaliza campos antes de validar 
         cat = _canon_categoria(row.get("categoria", ""), allowed_lookup=allowed_categorias_lookup)
         moneda_u = _canon_moneda(row.get("moneda"), allowed_lookup=allowed_monedas_lookup)
         metodo_u = _canon_metodo(row.get("metodo_pago"), allowed_lookup=allowed_metodos_lookup)
         comp_u = _canon_si_no(row.get("tiene_comprobante"))
         monto = row.get("monto", 0) or 0
 
-        # Guardamos los valores canónicos en el output para que quede “limpio”
         if "categoria" in out.columns:
             out.at[idx, "categoria"] = cat
         if "moneda" in out.columns:
@@ -588,7 +542,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
         motivos = []
         estatus = "APROBADO"
 
-        # Validaciones de catálogo
         if moneda_u and allowed_monedas_u and _safe_upper(moneda_u) not in allowed_monedas_u:
             estatus = "OBSERVADO"
             motivos.append(f"Moneda no permitida: {moneda_u}")
@@ -606,7 +559,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
             estatus = "OBSERVADO"
             motivos.append(f"Categoría fuera de catálogo: {cat}")
 
-        # Reglas por categoría
         rule = rules_map.get(cat, {"permitido": "SI", "requiere_comprobante": "SI", "tope_mxn": None})
         permitido = rule.get("permitido", "SI")
         req_comp = rule.get("requiere_comprobante", "SI")
@@ -618,7 +570,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
             estatus = "RECHAZADO"
             motivos.append("Categoría no permitida por política")
 
-        # Comprobante requerido
         if req_comp == "SI":
             if comp_u != "SI":
                 if estatus != "RECHAZADO":
@@ -632,7 +583,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
                         estatus = "OBSERVADO"
                     motivos.append("Falta folio_comprobante")
 
-        # Tope (solo si es numérico)
         try:
             if tope is not None and not pd.isna(tope):
                 tope_val = float(tope)
@@ -650,7 +600,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
         if estatus == "RECHAZADO":
             out.at[idx, "monto_aprobable"] = 0
 
-    # --- Summary ---
     summary = {
         "total_filas": int(len(out)),
         "aprobados": int((out["estatus"] == "APROBADO").sum()),
@@ -660,7 +609,6 @@ def validate_expenses_excel(req: func.HttpRequest) -> func.HttpResponse:
         "monto_aprobable_total": float(out["monto_aprobable"].fillna(0).sum()),
     }
 
-    # --- Write output Excel ---
     ts = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_blob_name = f"Gastos_Validado_{ts}.xlsx"
 
@@ -698,10 +646,9 @@ def _norm_text_ci(s: str) -> str:
 def _norm_name_key(s: str) -> str:
     if s is None:
         return ""
-    s = _norm_text_ci(s)  # lower, sin acentos, espacios normalizados
+    s = _norm_text_ci(s)
     s = re.sub(r"[^a-z0-9\\s]", " ", s)
     toks = [t for t in s.split() if t not in {"el","la","los","las","de","del","proyecto"}]
-    # singular simple: servicios -> servicio
     toks = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in toks]
     return " ".join(toks)
 
@@ -737,7 +684,6 @@ def _extract_numeric_key(x):
 def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("check_project_budget called")
 
-    # 1) leer params (query o json)
     project_key = req.params.get("project_key")
     project_name = req.params.get("project_name")
     amount = req.params.get("amount")
@@ -798,7 +744,6 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
 
     bsc = BlobServiceClient.from_connection_string(conn_str)
 
-    # 2) Descargar el Excel de presupuestos
     try:
         container, blob = _get_container_and_blob(budgets_blob_path)
         xbytes = _download_blob_bytes(bsc, container, blob)
@@ -822,7 +767,6 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 3) Leer Excel
     logging.info(f"budget_path={budgets_blob_path} bytes={len(xbytes)} first4={xbytes[:4]}")
     try:
         df = pd.read_excel(io.BytesIO(xbytes), sheet_name=0, engine="openpyxl")
@@ -846,7 +790,6 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 4) Validar columnas
     required_cols = {"Clave proyecto", "Nombre del proyecto", "Presupuesto", "Encargado"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -868,7 +811,6 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 5) Buscar proyecto (ignorar mayúsculas/acentos)
     match_row = None
 
     if project_key:
@@ -887,22 +829,18 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
         target = _norm_name_key(project_name)
         df["_norm_name_key"] = df["Nombre del proyecto"].apply(_norm_name_key)
 
-        # 1) exact match (normalizado + singular)
         df_name = df[df["_norm_name_key"] == target]
 
-        # 2) contains (en ambos sentidos, por si target viene largo)
         if df_name.empty and target:
             df_name = df[df["_norm_name_key"].str.contains(target, na=False)]
         if df_name.empty and target:
             df_name = df[df["_norm_name_key"].apply(lambda n: (n in target) or (target in n))]
 
-        # 3) fuzzy match (typos como "maztlán")
         if df_name.empty and target:
             scores = df["_norm_name_key"].apply(lambda n: SequenceMatcher(None, target, n).ratio())
             best_idx = scores.idxmax()
             best_score = float(scores.loc[best_idx])
 
-            # Umbral solicitado
             if best_score >= 0.82:
                 match_row = df.loc[best_idx]
             else:
@@ -975,7 +913,6 @@ def check_project_budget(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # 6) Dictamen
     if amount_val is None:
         ok = budget_val > 0
 
